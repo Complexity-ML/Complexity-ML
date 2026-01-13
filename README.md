@@ -52,7 +52,8 @@ expert_id = token_id % num_experts
 
 | Repository | Description | Status |
 |------------|-------------|--------|
-| [complexity-deep](https://github.com/Complexity-ML/complexity-framework) | Novel transformer with INL + Token-Routed MLP | Active |
+| [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training framework with INL dynamics | Active |
+| [complexity-deep](https://pypi.org/project/complexity-deep/) | Model architecture (INL + Token-Routed MLP) | PyPI |
 | [complexity-tokenizer](https://github.com/Complexity-ML/complexity-tokenizer) | Fast BPE tokenizer in Rust with INL-BPE training | PyPI |
 | [pacific-prime](https://huggingface.co/Pacific-Prime/pacific-prime) | 150M parameter model checkpoint | Training |
 
@@ -107,6 +108,7 @@ print(tokenizer.decode(output))
 ## Links
 
 - [HuggingFace](https://huggingface.co/Pacific-Prime)
+- [PyPI - complexity-deep](https://pypi.org/project/complexity-deep/)
 - [PyPI - complexity-tokenizer](https://pypi.org/project/complexity-tokenizer/)
 
 ---
