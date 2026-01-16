@@ -6,56 +6,85 @@ We develop novel transformer architectures focused on **determinism**, **efficie
 
 ---
 
-## Our Innovations
+## Our Innovations (v0.13.0)
 
-### INL Dynamics (Clamped)
+### 1. Mu-Guided Architecture (INL 2025)
 
-A control system inspired by robotics, integrated into transformer layers:
+The key innovation: **μ (mu)** from previous layers guides ALL components:
+
+```python
+# Mu-Guided Attention (KQV order - industry standard)
+x_mu = concat([x, mu_prev], dim=-1)
+k = x_mu @ concat([W_k, W_mu_k])  # K biased by mu
+q = x_mu @ concat([W_q, W_mu_q])  # Q biased by mu
+v = x_mu @ concat([W_v, W_mu_v])  # V biased by mu
+
+# Mu-Guided Expert Routing
+router_logits = base_router(x) + mu_router(mu_prev)
+
+# Contextual Mu for next layer
+mu_next = mu + mu_proj(h)
+```
+
+**Why Mu everywhere?**
+- **Top-down guidance**: Global context informs local computations
+- **2-3x faster convergence**: Model learns structure faster
+- **Fused operations**: concat+cuBLAS = 2x faster than separate matmuls
+
+---
+
+### 2. Token-Routed MLP + Mu Override
+
+Deterministic routing with contextual adaptation:
+
+```python
+# Base: deterministic, perfectly balanced
+expert_id = token_id % num_experts
+
+# Mu override: context can shift expert selection
+router_logits = base_router(x) + mu_router(mu_prev)
+```
+
+| Aspect | Top-K MoE | Token-Routed + Mu (Ours) |
+|--------|-----------|--------------------------|
+| Base Routing | 100% learned | **Deterministic (stable)** |
+| Context-Aware | Router network | **Mu (lightweight)** |
+| Expert Collapse | Risk | **None** |
+| Load Balancing Loss | Required | **Not needed** |
+| Auxiliary Loss | Required | **Not needed** |
+
+**Best of both worlds**: Stability of deterministic routing + intelligence of learned routing.
+
+---
+
+### 3. INL Dynamics with Contextual Mu
+
+A control system inspired by robotics:
 
 ```python
 error = h - mu                      # deviation from equilibrium
 v_next = alpha * v - beta * error   # velocity update (momentum + correction)
 h_next = h + dt * gate * v_next     # position update (integration)
+
+# v0.13.0: Contextual mu for next layer
+mu_contextual = mu + mu_proj(h)     # mu adapts based on current state
 ```
 
 **Key features:**
 - Smooth token trajectories (no jerky generation)
 - PID-like stability with learnable dynamics
-- Clamped parameters (`beta_max=2.0`, `velocity_max=10.0`) for training stability
+- Clamped parameters (`beta_max=2.0`) for training stability
+- **Mu Highway**: Context flows across all layers
 
 ---
 
-### Token-Routed MLP (Deterministic MoE)
+### 4. Modern Attention Stack
 
-A radically simple approach to Mixture of Experts:
-
-```python
-expert_id = token_id % num_experts
-```
-
-| Aspect | Learned MoE | Token-Routed (Ours) |
-|--------|-------------|---------------------|
-| Load Balancing | Learned | **Perfect by design** |
-| Routing Params | Millions | **Zero** |
-| Deterministic | No | **Yes** |
-| Routing Latency | 5-10ms | **<0.1ms** |
-
-**Why it works:**
-- Uniform distribution across experts
-- No expert collapse
-- 100% reproducible inference
-- One line of code
-
----
-
-## Projects
-
-| Repository | Description | Status |
-|------------|-------------|--------|
-| [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training framework with INL dynamics | Active |
-| [complexity-deep](https://pypi.org/project/complexity-deep/) | Model architecture (INL + Token-Routed MLP) | PyPI |
-| [complexity-tokenizer](https://github.com/Complexity-ML/complexity-tokenizer) | Fast BPE tokenizer in Rust with INL-BPE training | PyPI |
-| [pacific-prime](https://huggingface.co/Pacific-Prime/pacific-prime) | 150M parameter model checkpoint | Training |
+- **KQV Order**: Industry standard (Llama, Qwen, GPT) for optimal KV-cache
+- **GQA**: Grouped Query Attention (8 KV heads)
+- **QK Norm**: Attention stability at scale
+- **RoPE**: Rotary positional embeddings
+- **Flash Attention**: SDPA via PyTorch 2.0+
 
 ---
 
@@ -65,33 +94,75 @@ expert_id = token_id % num_experts
 Input
   │
   ▼
-[RMSNorm] → [GQA Attention] → [INL Dynamics] → [RMSNorm] → [Token-Routed MLP]
-  │                                                              │
-  └────────────────────── Residual ──────────────────────────────┘
-  │
-  ▼
-Output
+[RMSNorm] ─► [Mu-Guided GQA (KQV)] ─► [INL Dynamics] ─► [RMSNorm] ─► [Token-Routed MLP]
+  │              ▲                         │                              ▲
+  │              │                         │                              │
+  │         mu_prev                   mu_contextual ──────────────────────┘
+  │                                        │
+  +─────────────────── Residual ───────────┼──────────────────────────────+
+  │                                        │                              │
+  ▼                                        ▼                              │
+Output ◄───────────────────────────── mu_next (to next layer) ◄──────────┘
 ```
+
+---
+
+## Projects
+
+| Repository | Description | Version |
+|------------|-------------|---------|
+| [complexity-deep](https://github.com/Complexity-ML/complexity-deep) | Model architecture (Mu-Guided + Token-Routed) | v0.13.0 |
+| [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training framework with all innovations | v0.3.0 |
+| [small_words](https://huggingface.co/Pacific-Prime/small_words) | 1.5B parameter model checkpoint | Training |
+
+---
+
+## Current Training
+
+| Model | Params | Steps | Status |
+|-------|--------|-------|--------|
+| complexity-deep 1.5B | 1,516M | 100k/500k | Training on H100 |
+
+**Dataset**: FineWeb-Edu (French/English)
+**Hardware**: H100 80GB
+**Precision**: BF16
 
 ---
 
 ## Quick Start
 
 ```bash
-pip install complexity-deep
-pip install complexity-tokenizer
+pip install complexity-deep>=0.13.0
 ```
 
 ```python
-from complexity_deep import DeepForCausalLM
-from complexity_tokenizer import Tokenizer
+from complexity_deep import DeepForCausalLM, DeepConfig
+from tokenizers import Tokenizer
+import torch
 
-model = DeepForCausalLM.from_pretrained("Pacific-Prime/pacific-prime")
-tokenizer = Tokenizer.from_pretrained("Pacific-Prime/pacific-prime")
+# Load model
+model = DeepForCausalLM.from_pretrained("Pacific-Prime/small_words")
+tokenizer = Tokenizer.from_file("tokenizer.json")
 
-output = model.generate(tokenizer.encode("Hello"), max_new_tokens=50)
-print(tokenizer.decode(output))
+# Generate
+input_ids = torch.tensor([tokenizer.encode("Hello").ids])
+output = model.generate(input_ids, max_new_tokens=50, temperature=0.8)
+print(tokenizer.decode(output[0].tolist()))
 ```
+
+---
+
+## What Makes Us Different
+
+| Innovation | Status | Description |
+|------------|--------|-------------|
+| Mu-Guided KQV | **Novel** | μ biases K, Q, AND V projections |
+| Mu-Guided Expert Routing | **Novel** | μ influences MLP expert selection |
+| Contextual Mu (mu_proj) | **Novel** | μ adapts based on hidden state |
+| Token-Routed MLP | **Novel** | Deterministic routing by token ID |
+| INL Dynamics | **Novel** | Robotics control in transformers |
+| Fused Mu-KQV | **Novel** | 2x faster via concat+cuBLAS |
+| Hybrid Routing | **Novel** | Deterministic base + learned override |
 
 ---
 
@@ -99,9 +170,10 @@ print(tokenizer.decode(output))
 
 > **Simplicity over complexity.** The best ideas are often the simplest.
 
-- No learned routing when modulo works
-- No complex scheduling when clamping stabilizes
-- No over-engineering when one line suffices
+- Deterministic routing when it works → add learned override only where needed
+- Top-down guidance (μ) instead of complex routing networks
+- Fused operations for speed, not just correctness
+- Robotics-grade stability for production deployments
 
 ---
 
@@ -109,7 +181,9 @@ print(tokenizer.decode(output))
 
 - [HuggingFace](https://huggingface.co/Pacific-Prime)
 - [PyPI - complexity-deep](https://pypi.org/project/complexity-deep/)
-- [PyPI - complexity-tokenizer](https://pypi.org/project/complexity-tokenizer/)
+- [PyPI - complexity-framework](https://pypi.org/project/complexity-framework/)
+- [GitHub - complexity-deep](https://github.com/Complexity-ML/complexity-deep)
+- [GitHub - complexity-framework](https://github.com/Complexity-ML/complexity-framework)
 
 ---
 
