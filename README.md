@@ -113,7 +113,7 @@ Output ◄───────────────────────�
 |------------|-------------|---------|
 | [complexity-deep](https://github.com/Complexity-ML/complexity-deep) | Model architecture (Mu-Guided + Token-Routed) | v0.13.0 |
 | [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training framework with all innovations | v0.3.0 |
-| [small_words](https://huggingface.co/Pacific-Prime/small_words) | 1.5B parameter model checkpoint | Training |
+| [pacific-prime](https://huggingface.co/Pacific-Prime/pacific-prime) | 1.5B parameter model checkpoint | Training |
 
 ---
 
@@ -141,7 +141,7 @@ from tokenizers import Tokenizer
 import torch
 
 # Load model
-model = DeepForCausalLM.from_pretrained("Pacific-Prime/small_words")
+model = DeepForCausalLM.from_pretrained("Pacific-Prime/pacific-prime")
 tokenizer = Tokenizer.from_file("tokenizer.json")
 
 # Generate
