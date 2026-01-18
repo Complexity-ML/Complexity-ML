@@ -121,7 +121,7 @@ Output ◄───────────────────────�
 
 | Model | Params | Steps | Status |
 |-------|--------|-------|--------|
-| complexity-deep 1.5B | 1,516M | 100k/500k | Training on H100 |
+| complexity-deep 1.5B | 1,516M | 500k/1M | Training on H100 |
 
 **Dataset**: FineWeb-Edu (French/English)
 **Hardware**: H100 80GB
