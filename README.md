@@ -103,6 +103,10 @@ Ablation study on 500M tokens FineWeb-Edu (iso-param ~187M):
 
 **Inference**: 204 tokens/s on vLLM (RTX 5060 Ti, 16GB).
 
+### Expert Specialization (t-SNE)
+
+![Expert t-SNE](https://raw.githubusercontent.com/Complexity-ML/complexity-framework/main/figures/expert_tsne_3d_multiangle.png)
+
 ---
 
 ## Projects
