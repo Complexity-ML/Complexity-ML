@@ -6,75 +6,57 @@ We develop novel transformer architectures focused on **determinism**, **efficie
 
 ---
 
-## Our Innovations (v0.13.0)
+## Our Innovations
 
-### 1. Mu-Guided Architecture (INL 2025)
+### 1. Mu-Guidance (Inter-layer Communication)
 
-The key innovation: **μ (mu)** from previous layers guides ALL components:
+The key innovation: **μ (mu)** flows from layer $l$ to layer $l+1$, carrying expert-aware context:
 
 ```python
-# Mu-Guided Attention (KQV order - industry standard)
-x_mu = concat([x, mu_prev], dim=-1)
-k = x_mu @ concat([W_k, W_mu_k])  # K biased by mu
-q = x_mu @ concat([W_q, W_mu_q])  # Q biased by mu
-v = x_mu @ concat([W_v, W_mu_v])  # V biased by mu
+# Mu-Guided Attention: mu biases Q, K, V projections
+q = q_proj(x) + mu_to_q(mu_prev)
+k = k_proj(x) + mu_to_k(mu_prev)
+v = v_proj(x) + mu_to_v(mu_prev)
 
-# Mu-Guided Expert Routing
-router_logits = base_router(x) + mu_router(mu_prev)
-
-# Contextual Mu for next layer
-mu_next = mu + mu_proj(h)
+# Mu-Guidance after MLP (captures which expert processed each token)
+mu_current = clamp(mu_param + mu_proj(h), -2, 2)
 ```
 
-**Why Mu everywhere?**
-- **Top-down guidance**: Global context informs local computations
-- **2-3x faster convergence**: Model learns structure faster
-- **Fused operations**: concat+cuBLAS = 2x faster than separate matmuls
+**Why Mu?**
+- **Inter-layer coordination**: Previous layer's expert context informs next layer's attention
+- **Faster convergence**: -0.112 avg loss vs dense baseline
+- **Essential component**: Without Mu, Token-Routed is worse than dense
 
 ---
 
-### 2. Token-Routed MLP + Mu Override
+### 2. Token-Routed MLP (Deterministic MoE)
 
-Deterministic routing with contextual adaptation:
+Zipf-balanced routing with sort-and-split dispatch:
 
 ```python
-# Base: deterministic, perfectly balanced
-expert_id = token_id % num_experts
+# Zipf bin-packing: each expert gets equal frequency mass
+expert_id = token_to_expert[token_id]  # deterministic, zero overhead
 
-# Mu override: context can shift expert selection
-router_logits = base_router(x) + mu_router(mu_prev)
+# Sort-and-split dispatch: fixed chunks, bmm, fullgraph safe
+sort_idx = expert_ids.argsort(stable=True)
+# each expert processes exactly N/E tokens via bmm
 ```
 
-| Aspect | Top-K MoE | Token-Routed + Mu (Ours) |
-|--------|-----------|--------------------------|
-| Base Routing | 100% learned | **Deterministic (stable)** |
-| Context-Aware | Router network | **Mu (lightweight)** |
-| Expert Collapse | Risk | **None** |
-| Load Balancing Loss | Required | **Not needed** |
-| Auxiliary Loss | Required | **Not needed** |
-
-**Best of both worlds**: Stability of deterministic routing + intelligence of learned routing.
+| Aspect | Mixtral (learned) | Token-Routed (ours) |
+|--------|-------------------|---------------------|
+| Router | nn.Linear + softmax | **None (table lookup)** |
+| Load Balancing | Auxiliary loss | **Perfect by design** |
+| Expert Collapse | Possible | **Impossible** |
+| CUDA Graph Safe | Special handling | **Fully compatible** |
+| Dispatch | Gather/scatter | **Sort-and-split (bmm)** |
 
 ---
 
-### 3. INL Dynamics with Contextual Mu
+### 3. Shared Lexical Expert
 
-A control system inspired by robotics:
+A dense SwiGLU MLP that all tokens pass through, capturing common patterns (function words, syntax). Output = shared(x) + routed(x).
 
-```python
-error = h - mu                      # deviation from equilibrium
-v_next = alpha * v - beta * error   # velocity update (momentum + correction)
-h_next = h + dt * gate * v_next     # position update (integration)
-
-# v0.13.0: Contextual mu for next layer
-mu_contextual = mu + mu_proj(h)     # mu adapts based on current state
-```
-
-**Key features:**
-- Smooth token trajectories (no jerky generation)
-- PID-like stability with learnable dynamics
-- Clamped parameters (`beta_max=2.0`) for training stability
-- **Mu Highway**: Context flows across all layers
+Each expert specializes on its token subset while the shared expert handles universal patterns.
 
 ---
 
@@ -91,78 +73,94 @@ mu_contextual = mu + mu_proj(h)     # mu adapts based on current state
 ## Architecture
 
 ```
-Input
-  │
-  ▼
-[RMSNorm] ─► [Mu-Guided GQA (KQV)] ─► [INL Dynamics] ─► [RMSNorm] ─► [Token-Routed MLP]
-  │              ▲                         │                              ▲
-  │              │                         │                              │
-  │         mu_prev                   mu_contextual ──────────────────────┘
-  │                                        │
-  +─────────────────── Residual ───────────┼──────────────────────────────+
-  │                                        │                              │
-  ▼                                        ▼                              │
-Output ◄───────────────────────────── mu_next (to next layer) ◄──────────┘
+Input → [Embed] → mu_init (learnable)
+  │                  │
+  ▼                  ▼
+[RMSNorm] → [Mu-Guided GQA] → Residual → [RMSNorm] → [Token-Routed MLP + Shared Expert]
+  │              ▲                                          │
+  │         mu_prev                                    Residual
+  │                                                         │
+  │                                                    [Mu-Guidance]
+  │                                                         │
+  ▼                                                    mu_current → next layer
+Output ← [Final RMSNorm] ← [LM Head (tied)]
 ```
+
+**× 18 decoder layers** | 187M params | 4 experts | GQA 12h/4kv
+
+---
+
+## Results
+
+Ablation study on 500M tokens FineWeb-Edu (iso-param ~187M):
+
+| Configuration | Avg Loss (700 steps) |
+|---------------|---------------------|
+| **Token-Routed + Mu + Zipf** | **5.026** |
+| Mixtral-style (learned router) | 5.110 |
+| Token-Routed without Mu | 5.127 |
+| Dense SwiGLU baseline | 5.205 |
+
+**Inference**: 204 tokens/s on vLLM (RTX 5060 Ti, 16GB).
 
 ---
 
 ## Projects
 
-| Repository | Description | Version |
-|------------|-------------|---------|
-| [complexity-deep](https://github.com/Complexity-ML/complexity-deep) | Model architecture (Mu-Guided + Token-Routed) | v0.13.0 |
-| [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training framework with all innovations | v0.3.0 |
-| [pacific-prime](https://huggingface.co/Pacific-Prime/pacific-prime) | 1.5B parameter model checkpoint | Training |
+| Repository | Description |
+|------------|-------------|
+| [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training framework, model code, ablation scripts |
+| [vllm-cuda_graph](https://github.com/Complexity-ML/vllm-cuda_graph) | vLLM fork with Complexity-Deep inference support |
 
 ---
 
-## Current Training
+### 4. Zipf-Balanced Routing
 
-| Model | Params | Steps | Status |
-|-------|--------|-------|--------|
-| complexity-deep 1.5B | 1,58M | 1M/1M | Training on H100 |
+Simple modulo routing (`token_id % 4`) concentrates frequent tokens. Our Zipf-balanced bin-packing distributes tokens by corpus frequency:
 
-**Dataset**: FineWeb-Edu (French/English)
-**Hardware**: H100 80GB
-**Precision**: BF16
+1. Sort vocabulary by frequency (Zipf distribution)
+2. Greedy assignment: each token to the least-loaded expert
+3. Result: each expert handles equal frequency mass, not just equal token count
 
 ---
 
 ## Quick Start
 
 ```bash
-pip install complexity-deep>=0.13.0
+pip install complexity-framework
 ```
 
 ```python
-from complexity_deep import DeepForCausalLM, DeepConfig
-from tokenizers import Tokenizer
-import torch
+from complexity.models import ComplexityModel
+from complexity.config import ModelConfig
 
-# Load model
-model = DeepForCausalLM.from_pretrained("Pacific-Prime/pacific-prime")
-tokenizer = Tokenizer.from_file("tokenizer.json")
-
-# Generate
-input_ids = torch.tensor([tokenizer.encode("Hello").ids])
-output = model.generate(input_ids, max_new_tokens=50, temperature=0.8)
-print(tokenizer.decode(output[0].tolist()))
+config = ModelConfig(
+    hidden_size=768,
+    num_hidden_layers=18,
+    num_attention_heads=12,
+    num_key_value_heads=4,
+    intermediate_size=2048,
+    vocab_size=32000,
+    mlp_type="token_routed",
+    num_experts=4,
+    shared_expert=True,
+    use_mu_guidance=True,
+)
+model = ComplexityModel(config)  # 187M params
 ```
 
 ---
 
 ## What Makes Us Different
 
-| Innovation | Status | Description |
-|------------|--------|-------------|
-| Mu-Guided KQV | **Novel** | μ biases K, Q, AND V projections |
-| Mu-Guided Expert Routing | **Novel** | μ influences MLP expert selection |
-| Contextual Mu (mu_proj) | **Novel** | μ adapts based on hidden state |
-| Token-Routed MLP | **Novel** | Deterministic routing by token ID |
-| INL Dynamics | **Novel** | Robotics control in transformers |
-| Fused Mu-KQV | **Novel** | 2x faster via concat+cuBLAS |
-| Hybrid Routing | **Novel** | Deterministic base + learned override |
+| Innovation | Description |
+|------------|-------------|
+| Token-Routed MLP | Deterministic routing, no learned router |
+| Sort-and-Split Dispatch | BMM dispatch, fullgraph safe, CUDA graph compatible |
+| Zipf-Balanced Routing | Greedy bin-packing on corpus frequency |
+| Mu-Guidance | Inter-layer communication carrying expert context |
+| Shared Lexical Expert | Dense MLP for common patterns + routed experts |
+| Learnable mu_init | Layer 0 also gets inter-layer guidance |
 
 ---
 
@@ -170,20 +168,18 @@ print(tokenizer.decode(output[0].tolist()))
 
 > **Simplicity over complexity.** The best ideas are often the simplest.
 
-- Deterministic routing when it works → add learned override only where needed
-- Top-down guidance (μ) instead of complex routing networks
-- Fused operations for speed, not just correctness
-- Robotics-grade stability for production deployments
+- Deterministic routing instead of learned routers
+- Inter-layer communication (μ) instead of complex gating networks
+- Sort-and-split dispatch for GPU-friendly static shapes
+- Zipf-balanced assignment for natural language statistics
 
 ---
 
 ## Links
 
-- [HuggingFace](https://huggingface.co/Pacific-Prime)
-- [PyPI - complexity-deep](https://pypi.org/project/complexity-deep/)
-- [PyPI - complexity-framework](https://pypi.org/project/complexity-framework/)
-- [GitHub - complexity-deep](https://github.com/Complexity-ML/complexity-deep)
-- [GitHub - complexity-framework](https://github.com/Complexity-ML/complexity-framework)
+- [TMLR Paper (OpenReview)](https://openreview.net/forum?id=jZq6EVboC6)
+- [HuggingFace](https://huggingface.co/Complexity-ML)
+- [GitHub](https://github.com/Complexity-ML/complexity-framework)
 
 ---
 
