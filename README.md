@@ -10,8 +10,8 @@ Complexity-ML studies whether sequence transport and token-specific computation 
 Token IDs
    │
    ├──► tied lexical object ───────────────┐
-   │                                      │
-   ▼                                      ▼
+   │                                       │
+   ▼                                       ▼
 Embedding ─► shared dilated causal-convolution stack ─► lexical residuals ─► tied LM head
                   │
                   └── fixed-size decode state
