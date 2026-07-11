@@ -1,196 +1,92 @@
 # Complexity-ML
 
-**Building the next generation of efficient AI architectures.**
+**Attention-free language modeling with fixed-state inference.**
 
-We develop novel transformer architectures focused on **determinism**, **efficiency**, and **real-time inference**.
+Complexity-ML studies whether sequence transport and token-specific computation can be separated without query–key–value attention. Our current research architecture is a causal language model built from shared dilated convolutions, tied lexical objects, and narrow deterministic micro-expert residuals.
 
----
+## Current architecture
 
-## Our Innovations
-
-### 1. Mu-Guidance (Inter-layer Communication)
-
-The key innovation: **μ (mu)** flows from layer $l$ to layer $l+1$, carrying expert-aware context:
-
-```python
-# Mu-Guided Attention: mu biases Q, K, V projections
-q = q_proj(x) + mu_to_q(mu_prev)
-k = k_proj(x) + mu_to_k(mu_prev)
-v = v_proj(x) + mu_to_v(mu_prev)
-
-# Mu-Guidance after MLP (captures which expert processed each token)
-mu_current = clamp(mu_param + mu_proj(h), -2, 2)
+```text
+Token IDs
+   │
+   ├──► tied lexical object ───────────────┐
+   │                                      │
+   ▼                                      ▼
+Embedding ─► shared dilated causal-convolution stack ─► lexical residuals ─► tied LM head
+                  │
+                  └── fixed-size decode state
 ```
 
-**Why Mu?**
-- **Inter-layer coordination**: Previous layer's expert context informs next layer's attention
-- **Faster convergence**: -0.112 avg loss vs dense baseline
-- **Essential component**: Without Mu, Token-Routed is worse than dense
+### Shared causal-convolution substrate
 
----
+Every token passes through the same stack of depthwise causal convolutions. Dilations expand the finite receptive field while keeping incremental decoding simple and deterministic.
 
-### 2. Token-Routed MLP (Deterministic MoE)
+### Tied lexical objects
 
-Zipf-balanced routing with sort-and-split dispatch:
+A low-rank object indexed by token identity is shared across layers and tied to the embedding/output space. It provides token-specific structure without replacing the shared sequence-processing path.
 
-```python
-# Zipf bin-packing: each expert gets equal frequency mass
-expert_id = token_to_expert[token_id]  # deterministic, zero overhead
+### Narrow deterministic micro-experts
 
-# Sort-and-split dispatch: fixed chunks, bmm, fullgraph safe
-sort_idx = expert_ids.argsort(stable=True)
-# each expert processes exactly N/E tokens via bmm
-```
+Small token-routed residuals add lexical specialization. Routing is deterministic and inexpensive; the shared convolutional substrate remains active for every token.
 
-| Aspect | Mixtral (learned) | Token-Routed (ours) |
-|--------|-------------------|---------------------|
-| Router | nn.Linear + softmax | **None (table lookup)** |
-| Load Balancing | Auxiliary loss | **Perfect by design** |
-| Expert Collapse | Possible | **Impossible** |
-| CUDA Graph Safe | Special handling | **Fully compatible** |
-| Dispatch | Gather/scatter | **Sort-and-split (bmm)** |
+## What the canonical model does not use
 
----
+The current attention-free model has:
 
-### 3. Shared Lexical Expert
+- no query, key, or value projections;
+- no attention score matrix or softmax attention;
+- no growing KV cache;
+- no selective scan or Mamba/SSM computation;
+- no learned routing network.
 
-A dense SwiGLU MLP that all tokens pass through, capturing common patterns (function words, syntax). Output = shared(x) + routed(x).
+The earlier Mu-guided GQA and token-routed Transformer experiments remain useful controls, but they are no longer the canonical architecture.
 
-Each expert specializes on its token subset while the shared expert handles universal patterns.
+## Fixed-state inference
 
----
+Incremental decoding stores only the causal-convolution history required by each dilation. State size is independent of the number of generated tokens.
 
-### 4. Modern Attention Stack
+For the measured 10-layer, width-384 checkpoint:
 
-- **KQV Order**: Industry standard (Llama, Qwen, GPT) for optimal KV-cache
-- **GQA**: Grouped Query Attention (8 KV heads)
-- **QK Norm**: Attention stability at scale
-- **RoPE**: Rotary positional embeddings
-- **Flash Attention**: SDPA via PyTorch 2.0+
+- compact architecture-specific state: 301,056 elements, or 588 KiB per sequence in BF16;
+- current vLLM uniform allocation: 1,478,400 elements, or 2.82 MiB per sequence in BF16;
+- cache addresses remain stable across decode steps;
+- full-sequence and incremental logits agree within numerical tolerance in unit tests.
 
----
+## H100 CUDA Graph result
 
-## Architecture
+An official `vllm bench throughput` run on one NVIDIA H100 80GB in BF16 used 1,000 simultaneous requests, one input token and 128 generated tokens per request, with a full decode CUDA Graph captured at batch size 1,000.
 
-```
-Input → [Embed] → mu_init (learnable)
-  │                  │
-  ▼                  ▼
-[RMSNorm] → [Mu-Guided GQA] → Residual → [RMSNorm] → [Token-Routed MLP + Shared Expert]
-  │              ▲                                          │
-  │         mu_prev                                    Residual
-  │                                                         │
-  │                                                    [Mu-Guidance]
-  │                                                         │
-  ▼                                                    mu_current → next layer
-Output ← [Final RMSNorm] ← [LM Head (tied)]
-```
+| Metric | Measured value |
+|---|---:|
+| Elapsed time | 1.71095 s |
+| Requests/s | 584.47 |
+| Total tokens/s | 75,396.81 |
+| Generated tokens/s | **74,812.34** |
+| Generated tokens | 128,000 |
 
-**× 18 decoder layers** | 187M params | 4 experts | GQA 12h/4kv
+This is a saturated decode-throughput measurement, not a long-prompt prefill result. The current general-prefill path still requires kernelization before we claim competitive time-to-first-token or long-context prefill performance.
 
----
+## Evidence standard
 
-## Results
+The research program uses matched controls and explicit structural tests rather than treating low language-model loss as sufficient evidence. The planned/reported evidence suite includes:
 
-Ablation study on 500M tokens FineWeb-Edu (iso-param ~187M):
-
-| Configuration | Avg Loss (700 steps) |
-|---------------|---------------------|
-| **Token-Routed + Mu + Zipf** | **5.026** |
-| Mixtral-style (learned router) | 5.110 |
-| Token-Routed without Mu | 5.127 |
-| Dense SwiGLU baseline | 5.205 |
-
-**Inference**: 204 tokens/s on vLLM (RTX 5060 Ti, 16GB).
-
-### Loss Gap: Dense vs Token-Routed
-
-![Loss Gap](https://raw.githubusercontent.com/Complexity-ML/complexity-framework/main/figures/fig_loss_gap.png)
-
-### Expert Specialization (t-SNE)
-
-![Expert t-SNE](https://raw.githubusercontent.com/Complexity-ML/complexity-framework/main/figures/expert_tsne_3d_multiangle.png)
-
----
+- iso-parameter GQA, convolution+dense-FFN, lexical-object, and full-model controls;
+- strict-causality tests based on future-token perturbations;
+- realized-model audits proving the absence of QKV parameters and attention modules;
+- full-sequence versus incremental-logit equivalence;
+- fixed cache-size and stable-address checks;
+- associative recall, induction, and synthetic in-context-learning diagnostics across distance;
+- hardware-specific prefill, decode, latency, and memory measurements with exact protocols.
 
 ## Projects
 
 | Repository | Description |
-|------------|-------------|
-| [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training framework, model code, ablation scripts |
-| [vllm-cuda_graph](https://github.com/Complexity-ML/vllm-cuda_graph) | vLLM fork with Complexity-Deep inference support |
+|---|---|
+| [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training, evaluation, ablations, and model definitions |
+| [vllm-cuda_graph](https://github.com/Complexity-ML/vllm-cuda_graph) | vLLM integration for fixed-state dilated-convolution inference |
 
----
+The precompiled Linux/Python 3.12/CUDA 12.8 wheel is available in the [v0.3.0 release](https://github.com/Complexity-ML/vllm-cuda_graph/releases/tag/v0.3.0).
 
-### 4. Zipf-Balanced Routing
+## Status
 
-Simple modulo routing (`token_id % 4`) concentrates frequent tokens. Our Zipf-balanced bin-packing distributes tokens by corpus frequency:
-
-1. Sort vocabulary by frequency (Zipf distribution)
-2. Greedy assignment: each token to the least-loaded expert
-3. Result: each expert handles equal frequency mass, not just equal token count
-
----
-
-## Quick Start
-
-```bash
-pip install complexity-framework
-```
-
-```python
-from complexity.models import ComplexityModel
-from complexity.config import ModelConfig
-
-config = ModelConfig(
-    hidden_size=768,
-    num_hidden_layers=18,
-    num_attention_heads=12,
-    num_key_value_heads=4,
-    intermediate_size=2048,
-    vocab_size=32000,
-    mlp_type="token_routed",
-    num_experts=4,
-    shared_expert=True,
-    use_mu_guidance=True,
-)
-model = ComplexityModel(config)  # 187M params
-```
-
----
-
-## What Makes Us Different
-
-| Innovation | Description |
-|------------|-------------|
-| Token-Routed MLP | Deterministic routing, no learned router |
-| Sort-and-Split Dispatch | BMM dispatch, fullgraph safe, CUDA graph compatible |
-| Zipf-Balanced Routing | Greedy bin-packing on corpus frequency |
-| Mu-Guidance | Inter-layer communication carrying expert context |
-| Shared Lexical Expert | Dense MLP for common patterns + routed experts |
-| Learnable mu_init | Layer 0 also gets inter-layer guidance |
-
----
-
-## Philosophy
-
-> **Simplicity over complexity.** The best ideas are often the simplest.
-
-- Deterministic routing instead of learned routers
-- Inter-layer communication (μ) instead of complex gating networks
-- Sort-and-split dispatch for GPU-friendly static shapes
-- Zipf-balanced assignment for natural language statistics
-
----
-
-## Links
-
-- [TMLR Paper (OpenReview)](https://openreview.net/forum?id=jZq6EVboC6)
-- [HuggingFace](https://huggingface.co/Complexity-ML)
-- [GitHub](https://github.com/Complexity-ML/complexity-framework)
-
----
-
-<p align="center">
-  <i>Deterministic AI for a predictable future.</i>
-</p>
+This is active research. Throughput claims are hardware- and workload-specific, and architecture claims are limited to the realized attention-free checkpoints and configurations being evaluated. Transformer/QKV variants are retained as controls, not presented as the deployment target.
