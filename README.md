@@ -1,10 +1,17 @@
 # Complexity-ML
 
-**Attention-free language modeling with fixed-state inference.**
+**Open research on fixed-state inference and deterministic lexical computation.**
 
-Complexity-ML studies whether sequence transport and token-specific computation can be separated without query–key–value attention. Our current research architecture is a causal language model built from shared dilated convolutions, tied lexical objects, and narrow deterministic micro-expert residuals.
+Complexity-ML studies two related questions:
 
-## Current architecture
+1. Can sequence transport and token-specific computation be separated without query–key–value attention?
+2. Can token identity select a small, useful residual parameter subspace when a shared dense path already handles contextual computation?
+
+These are separate research tracks with separate realized architectures and evidence.
+
+## Current attention-free architecture
+
+The current attention-free architecture is a causal language model built from shared dilated convolutions, tied lexical objects, and narrow deterministic micro-expert residuals.
 
 ```text
 Token IDs
@@ -39,7 +46,29 @@ The current attention-free model has:
 - no selective scan or Mamba/SSM computation;
 - no learned routing network.
 
-The earlier Mu-guided GQA and token-routed Transformer experiments remain useful controls, but they are no longer the canonical architecture.
+This list applies only to the attention-free architecture. The matched token-routing study below uses a Transformer backbone and is reported as a separate controlled experiment.
+
+## Token-identity residual routing study
+
+The revised paper, **Token Identity as a Routing Signal for Residual MLP Experts**, evaluates a deliberately asymmetric Transformer MLP:
+
+```text
+Contextual hidden state x_t
+   ├──► shared dense SwiGLU ──────────────────────┐
+   └──► two narrow residual experts selected     ├──► feed-forward output
+         by a fixed layer-specific token-ID table┘
+```
+
+Every token traverses the shared dense SwiGLU branch. Token identity selects two of four narrow residual experts, but both the shared branch and selected experts transform the same contextual hidden state. Token identity therefore controls parameter selection, not the contextual representation.
+
+The primary experiment compares one 306.5M-parameter token-routed run with one matched dense run over 8B FineWeb-Edu tokens. At the last common checkpoint on a fixed evaluation stream drawn from the training split, the routed model reaches NLL 2.9329 and dense reaches 2.9482. The routed implementation trains more slowly. Because the comparison is single-seed and the evaluation stream is not held out, this is a matched-run observation rather than evidence of general superiority.
+
+The final checkpoints are near parity on zero-shot ARC-Easy, PIQA and HellaSwag; the routed model reports WikiText-2 perplexity 35.20 versus 35.79 for dense.
+
+- [Paper and reproducibility artifacts](https://github.com/Complexity-ML/tmlr-paper-pool)
+- [TR-MOE-306 checkpoint](https://huggingface.co/Pacific-i64/TR-MOE-306)
+- [Dense-306 checkpoint](https://huggingface.co/Pacific-i64/Dense-306)
+- [Linux CPU inference runtime](https://github.com/Complexity-ML/vllm-i64)
 
 ## Fixed-state inference
 
@@ -82,11 +111,13 @@ The research program uses matched controls and explicit structural tests rather 
 
 | Repository | Description |
 |---|---|
-| [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training, evaluation, ablations, and model definitions |
+| [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | Training, evaluation, ablations, and realized model definitions |
 | [vllm-cuda_graph](https://github.com/Complexity-ML/vllm-cuda_graph) | vLLM integration for fixed-state dilated-convolution inference |
+| [tmlr-paper-pool](https://github.com/Complexity-ML/tmlr-paper-pool) | Revised token-routing manuscripts, metrics, figures, tests, and reproducibility material |
+| [vllm-i64](https://github.com/Complexity-ML/vllm-i64) | Linux CPU inference for the matched TR-MOE-306 and Dense-306 checkpoints |
 
 The precompiled Linux/Python 3.12/CUDA 12.8 wheel is available in the [v0.3.0 release](https://github.com/Complexity-ML/vllm-cuda_graph/releases/tag/v0.3.0).
 
 ## Status
 
-This is active research. Throughput claims are hardware- and workload-specific, and architecture claims are limited to the realized attention-free checkpoints and configurations being evaluated. Transformer/QKV variants are retained as controls, not presented as the deployment target.
+This is active research. Throughput claims are hardware- and workload-specific. Architecture claims are limited to the corresponding realized checkpoints and configurations: attention-free fixed-state models and token-routed Transformer controls are reported separately.
