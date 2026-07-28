@@ -55,8 +55,8 @@ The revised paper, **Token Identity as a Routing Signal for Residual MLP Experts
 ```text
 Contextual hidden state x_t
    ├──► shared dense SwiGLU ──────────────────────┐
-   └──► two narrow residual experts selected     ├──► feed-forward output
-         by a fixed layer-specific token-ID table┘
+   └──► two narrow residual experts selected      ├──► feed-forward output
+         by a fixed layer-specific token-ID table ┘
 ```
 
 Every token traverses the shared dense SwiGLU branch. Token identity selects two of four narrow residual experts, but both the shared branch and selected experts transform the same contextual hidden state. Token identity therefore controls parameter selection, not the contextual representation.
