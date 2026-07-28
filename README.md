@@ -66,6 +66,7 @@ The primary experiment compares one 306.5M-parameter token-routed run with one m
 The final checkpoints are near parity on zero-shot ARC-Easy, PIQA and HellaSwag; the routed model reports WikiText-2 perplexity 35.20 versus 35.79 for dense.
 
 - [Paper and reproducibility artifacts](https://github.com/Complexity-ML/tmlr-paper-pool)
+- [Interactive paper companion](https://huggingface.co/spaces/Pacific-i64/Token-Routing-Interactive-Paper)
 - [TR-MOE-306 checkpoint](https://huggingface.co/Pacific-i64/TR-MOE-306)
 - [Dense-306 checkpoint](https://huggingface.co/Pacific-i64/Dense-306)
 - [Linux CPU inference runtime](https://github.com/Complexity-ML/vllm-i64)
