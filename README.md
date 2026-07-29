@@ -1,18 +1,11 @@
 # Complexity-ML
 
-**Open research on deterministic token routing and fixed-state inference.**
+**Open research on deterministic token routing for language models.**
 
 Complexity-ML studies how token identity can select a small parameter subspace
 while shared computation continues to process the full contextual hidden state.
-The organization currently maintains two separate research programs:
-
-1. **TR-GQA and TR-MHA** combine standard causal attention with a deterministic
-   Token-Routed Mixture-of-Experts feed-forward path.
-2. **Fixed-state models** explore attention-free sequence transport with
-   dilated causal convolutions and bounded decode state.
-
-Results and architecture claims are reported per realized model. Evidence from
-one program is not transferred to the other.
+TR-GQA and TR-MHA combine standard causal attention with a deterministic
+Token-Routed Mixture-of-Experts feed-forward path.
 
 ## Research map
 
@@ -20,7 +13,6 @@ one program is not transferred to the other.
 |---|---|---|---|
 | **TR-GQA** | Grouped-query attention | Shared dense SwiGLU + deterministic residual experts | Matched 306.5M / 8B-token run pair |
 | **TR-MHA** | Multi-head attention | Shared dense SwiGLU + deterministic residual experts | Matched 99.5M short MPS pilot |
-| **Fixed-state** | Dilated causal convolution | Tied lexical objects + micro-expert residuals | Structural tests and H100 decode benchmark |
 
 ## TR-MoE: the shared feed-forward primitive
 
@@ -89,56 +81,6 @@ replication. It does not establish scaling behavior or statistical
 significance. See the
 [TR-MHA technical note](https://github.com/Complexity-ML/complexity-framework/blob/main/TR_MHA.md).
 
-## Attention-free fixed-state track
-
-The separate attention-free architecture uses shared dilated causal
-convolutions, tied lexical objects, and narrow deterministic micro-expert
-residuals:
-
-```text
-Token IDs
-   │
-   ├──► tied lexical object ───────────────┐
-   │                                       │
-   ▼                                       ▼
-Embedding ─► shared dilated causal-convolution stack ─► lexical residuals ─► tied LM head
-                  │
-                  └── fixed-size decode state
-```
-
-This realized model has no Q/K/V projections, attention score matrix, softmax
-attention, growing KV cache, selective scan, Mamba/SSM computation, or learned
-routing network. These properties apply only to the attention-free track.
-
-Incremental decoding stores only the convolution history required by each
-dilation. For the measured 10-layer, width-384 checkpoint:
-
-- compact architecture-specific state: 301,056 elements, or 588 KiB per
-  sequence in BF16;
-- current vLLM uniform allocation: 1,478,400 elements, or 2.82 MiB per
-  sequence in BF16;
-- cache addresses remain stable across decode steps;
-- full-sequence and incremental logits agree within numerical tolerance in
-  unit tests.
-
-### H100 CUDA Graph measurement
-
-An official `vllm bench throughput` run on one NVIDIA H100 80GB in BF16 used
-1,000 simultaneous requests, one input token, and 128 generated tokens per
-request. A full decode CUDA Graph was captured at batch size 1,000.
-
-| Metric | Measured value |
-|---|---:|
-| Elapsed time | 1.71095 s |
-| Requests/s | 584.47 |
-| Total tokens/s | 75,396.81 |
-| Generated tokens/s | **74,812.34** |
-| Generated tokens | 128,000 |
-
-This is a saturated decode-throughput measurement, not a long-prompt prefill
-result. The general-prefill path still requires kernelization before any claim
-about competitive time-to-first-token or long-context prefill performance.
-
 ## Repositories
 
 | Repository | Purpose |
@@ -146,11 +88,6 @@ about competitive time-to-first-token or long-context prefill performance.
 | [complexity-framework](https://github.com/Complexity-ML/complexity-framework) | TR-GQA, TR-MHA, TR-MoE, training, evaluation, ablations, and model definitions |
 | [tmlr-paper-pool](https://github.com/Complexity-ML/tmlr-paper-pool) | Token-identity routing manuscript, measurements, figures, tests, and reproducibility artifacts |
 | [vllm-i64](https://github.com/Complexity-ML/vllm-i64) | Linux CPU inference for the matched TR-MOE-306 and Dense-306 checkpoints |
-| [vllm-cuda_graph](https://github.com/Complexity-ML/vllm-cuda_graph) | vLLM integration for fixed-state dilated-convolution inference |
-
-The precompiled Linux/Python 3.12/CUDA 12.8 wheel for the fixed-state runtime
-is available in the
-[`v0.3.0` release](https://github.com/Complexity-ML/vllm-cuda_graph/releases/tag/v0.3.0).
 
 ## Evidence standard
 
@@ -160,8 +97,6 @@ priorities include:
 
 - multi-seed and compute-matched replication;
 - independent held-out evaluation and corpus-sensitivity analysis;
-- strict causality and full-sequence versus incremental-logit equivalence;
-- cache-size and stable-address audits for fixed-state models;
 - exact hardware-specific prefill, decode, latency, memory, and throughput
   protocols.
 
